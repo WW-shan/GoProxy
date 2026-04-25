@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"goproxy/compat"
 	"goproxy/config"
 	"goproxy/custom"
 	"goproxy/logger"
@@ -53,9 +54,10 @@ type Server struct {
 	customMgr     *custom.Manager
 	fetchTrigger  FetchTrigger
 	configChanged chan<- struct{}
+	wenfxlSync    *compat.WenfxlSyncService
 }
 
-func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Manager, ft FetchTrigger, cc chan<- struct{}) *Server {
+func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Manager, ft FetchTrigger, cc chan<- struct{}, ws *compat.WenfxlSyncService) *Server {
 	return &Server{
 		storage:       s,
 		cfg:           cfg,
@@ -63,6 +65,7 @@ func New(s *storage.Storage, cfg *config.Config, pm *pool.Manager, cm *custom.Ma
 		customMgr:     cm,
 		fetchTrigger:  ft,
 		configChanged: cc,
+		wenfxlSync:    ws,
 	}
 }
 
@@ -95,6 +98,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/fetch", s.authMiddleware(s.apiFetch))
 	mux.HandleFunc("/api/refresh-latency", s.authMiddleware(s.apiRefreshLatency))
 	mux.HandleFunc("/api/config/save", s.authMiddleware(s.apiConfigSave))
+	mux.HandleFunc("/api/compat/wenfxl/raw-pool", s.authMiddleware(s.apiExportWenfxlRawPool))
+	mux.HandleFunc("/api/compat/wenfxl/sync", s.authMiddleware(s.apiSyncWenfxlRawPool))
 
 	// 订阅管理 API
 	mux.HandleFunc("/api/subscriptions", s.readOnlyMiddleware(s.apiSubscriptions))
@@ -345,6 +350,41 @@ func (s *Server) apiRefreshLatency(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "refresh started"})
 }
 
+
+func (s *Server) apiExportWenfxlRawPool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.wenfxlSync == nil {
+		jsonError(w, "wenfxl sync not configured", http.StatusServiceUnavailable)
+		return
+	}
+	proxyList, err := s.wenfxlSync.ExportRawProxyList()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]interface{}{"status": "success", "proxy_list": proxyList})
+}
+
+func (s *Server) apiSyncWenfxlRawPool(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.wenfxlSync == nil {
+		jsonError(w, "wenfxl sync not configured", http.StatusServiceUnavailable)
+		return
+	}
+	result, err := s.wenfxlSync.SyncRawPoolToWenfxl()
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, map[string]interface{}{"status": "success", "count": result.Count, "target": result.Target})
+}
+
 func (s *Server) apiLogs(w http.ResponseWriter, r *http.Request) {
 	lines := logger.GetLines(100)
 	jsonOK(w, map[string]interface{}{"lines": lines})
@@ -390,6 +430,14 @@ func (s *Server) apiConfig(w http.ResponseWriter, r *http.Request) {
 		"custom_free_priority":    cfg.CustomFreePriority,
 		"custom_probe_interval":   cfg.CustomProbeInterval,
 		"custom_refresh_interval": cfg.CustomRefreshInterval,
+
+		// Wenfxl 兼容同步配置
+		"wenfxl_sync_enabled":         cfg.WenfxlSyncEnabled,
+		"wenfxl_sync_target_url":      cfg.WenfxlSyncTargetURL,
+		"wenfxl_sync_password":        cfg.WenfxlSyncPassword,
+		"wenfxl_sync_enable_raw_pool": cfg.WenfxlSyncEnableRawPool,
+		"wenfxl_sync_disable_default": cfg.WenfxlSyncDisableDefault,
+		"wenfxl_sync_proxy_limit":     cfg.WenfxlSyncProxyLimit,
 	})
 }
 
@@ -420,6 +468,12 @@ func (s *Server) apiConfigSave(w http.ResponseWriter, r *http.Request) {
 		CustomFreePriority    *bool    `json:"custom_free_priority"`
 		CustomProbeInterval   int      `json:"custom_probe_interval"`
 		CustomRefreshInterval int      `json:"custom_refresh_interval"`
+		WenfxlSyncEnabled        bool     `json:"wenfxl_sync_enabled"`
+		WenfxlSyncTargetURL      string   `json:"wenfxl_sync_target_url"`
+		WenfxlSyncPassword       string   `json:"wenfxl_sync_password"`
+		WenfxlSyncEnableRawPool  *bool    `json:"wenfxl_sync_enable_raw_pool"`
+		WenfxlSyncDisableDefault *bool    `json:"wenfxl_sync_disable_default"`
+		WenfxlSyncProxyLimit     int      `json:"wenfxl_sync_proxy_limit"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -474,6 +528,23 @@ func (s *Server) apiConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CustomRefreshInterval > 0 {
 		newCfg.CustomRefreshInterval = req.CustomRefreshInterval
+	}
+
+	newCfg.WenfxlSyncEnabled = req.WenfxlSyncEnabled
+	if req.WenfxlSyncTargetURL != "" {
+		newCfg.WenfxlSyncTargetURL = req.WenfxlSyncTargetURL
+	}
+	if req.WenfxlSyncPassword != "" {
+		newCfg.WenfxlSyncPassword = req.WenfxlSyncPassword
+	}
+	if req.WenfxlSyncEnableRawPool != nil {
+		newCfg.WenfxlSyncEnableRawPool = *req.WenfxlSyncEnableRawPool
+	}
+	if req.WenfxlSyncDisableDefault != nil {
+		newCfg.WenfxlSyncDisableDefault = *req.WenfxlSyncDisableDefault
+	}
+	if req.WenfxlSyncProxyLimit > 0 {
+		newCfg.WenfxlSyncProxyLimit = req.WenfxlSyncProxyLimit
 	}
 
 	if err := config.Save(&newCfg); err != nil {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"goproxy/checker"
+	"goproxy/compat"
 	"goproxy/config"
 	"goproxy/custom"
 	"goproxy/fetcher"
@@ -95,11 +96,12 @@ func main() {
 
 	// 配置变更通知 channel
 	configChanged := make(chan struct{}, 1)
+	syncSvc := compat.NewWenfxlSyncService(store, cfg)
 
 	// 启动 WebUI（传递池子管理器和订阅管理器）
 	ui := webui.New(store, cfg, poolMgr, customMgr, func() {
 		go smartFetchAndFill(fetch, validate, store, poolMgr)
-	}, configChanged)
+	}, configChanged, syncSvc)
 	ui.Start()
 
 	// 首次智能填充（清理后立即触发）

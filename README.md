@@ -160,9 +160,80 @@ fetch('https://httpbin.org/ip', { agent }).then(r => r.json()).then(console.log)
 ssh -o ProxyCommand='nc -X 5 -x localhost:7779 %h %p' user@remote-server
 ```
 
-## 订阅导入
 
-通过 WebUI 管理订阅（管理员登录后）：
+## 对接 Wenfxl 原生代理池
+
+如果你要把 GoProxy 的可用代理直接喂给 `/root/Wenfxl-Codex-Manager-v12.0.1` 的 `raw_proxy_pool`，现在可以走两种方式：
+
+### 1. 导出兼容列表
+
+管理员登录 GoProxy WebUI 后，可调用：
+
+```bash
+curl -s http://localhost:7778/api/compat/wenfxl/raw-pool \
+  --cookie "session=<admin-session>"
+```
+
+返回示例：
+
+```json
+{
+  "status": "success",
+  "proxy_list": [
+    "http://1.2.3.4:8080",
+    "socks5://5.6.7.8:1080"
+  ]
+}
+```
+
+这些 URL 可以直接写入 Wenfxl 项目的 `raw_proxy_pool.proxy_list`。
+
+### 2. 直接同步到 Wenfxl 项目
+
+GoProxy 可以直接调用 Wenfxl 项目的 `/api/login` 和 `/api/config`，把当前活动代理同步到它的 `raw_proxy_pool`。
+
+先在 GoProxy 配置中填好这些字段：
+
+```json
+{
+  "wenfxl_sync_enabled": true,
+  "wenfxl_sync_target_url": "http://127.0.0.1:8000",
+  "wenfxl_sync_password": "你的 Wenfxl Web 密码",
+  "wenfxl_sync_enable_raw_pool": true,
+  "wenfxl_sync_disable_default": true,
+  "wenfxl_sync_proxy_limit": 20
+}
+```
+
+然后调用：
+
+```bash
+curl -s -X POST http://localhost:7778/api/compat/wenfxl/sync \
+  --cookie "session=<admin-session>"
+```
+
+返回示例：
+
+```json
+{
+  "status": "success",
+  "count": 12,
+  "target": "http://127.0.0.1:8000"
+}
+```
+
+同步后的 Wenfxl 配置效果类似：
+
+```yaml
+raw_proxy_pool:
+  enable: true
+  proxy_list:
+    - http://1.2.3.4:8080
+    - socks5://5.6.7.8:1080
+```
+
+如果 `wenfxl_sync_disable_default=true`，GoProxy 还会把 Wenfxl 里的 `default_proxy` 清空，避免它继续走单代理出口。
+
 
 1. **订阅 URL** — 填入 Clash/V2ray 订阅地址，自动识别格式并解析
 2. **上传文件** — 拖拽或选择 Clash YAML / V2ray 配置文件

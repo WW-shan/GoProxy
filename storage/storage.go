@@ -376,6 +376,40 @@ func (s *Storage) GetAllFiltered(sourceFilter string) ([]Proxy, error) {
 	return proxies, nil
 }
 
+// ListActiveProxiesForExport 获取用于导出的可用代理列表
+func (s *Storage) ListActiveProxiesForExport(limit int, sourceFilter string) ([]Proxy, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+
+	query := `SELECT ` + proxyColumns + `
+		 FROM proxies
+		 WHERE status IN ('active', 'degraded') AND fail_count < 3`
+	var args []interface{}
+	if sourceFilter != "" {
+		query += ` AND source = ?`
+		args = append(args, sourceFilter)
+	}
+	query += ` ORDER BY latency ASC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var proxies []Proxy
+	for rows.Next() {
+		p, err := scanProxy(rows)
+		if err != nil {
+			return nil, err
+		}
+		proxies = append(proxies, *p)
+	}
+	return proxies, nil
+}
+
 // GetRandomExclude 排除指定地址随机取一个
 func (s *Storage) GetRandomExclude(excludes []string) (*Proxy, error) {
 	return s.GetRandomExcludeFiltered(excludes, "")

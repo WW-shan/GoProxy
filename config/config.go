@@ -96,6 +96,14 @@ type Config struct {
 	SingBoxPath           string // sing-box 二进制路径（默认 "sing-box"）
 	SingBoxBasePort       int    // sing-box 本地端口起始（默认 20000）
 
+	// ========== Wenfxl 兼容同步配置 ==========
+	WenfxlSyncEnabled        bool
+	WenfxlSyncTargetURL      string
+	WenfxlSyncPassword       string
+	WenfxlSyncEnableRawPool  bool
+	WenfxlSyncDisableDefault bool
+	WenfxlSyncProxyLimit     int
+
 	// ========== 兼容旧配置 ==========
 	MaxResponseMs int // 已废弃，使用 MaxLatencyMs 替代
 	MaxFailCount  int // 代理失败次数阈值
@@ -107,6 +115,7 @@ type Config struct {
 	HTTPSourceURL   string
 	SOCKS5SourceURL string
 }
+
 
 var (
 	globalCfg *Config
@@ -235,6 +244,14 @@ func DefaultConfig() *Config {
 		SingBoxPath:           singBoxPath,
 		SingBoxBasePort:       20000,
 
+		// Wenfxl 兼容同步配置
+		WenfxlSyncEnabled:        false,
+		WenfxlSyncTargetURL:      "http://127.0.0.1:8000",
+		WenfxlSyncPassword:       "",
+		WenfxlSyncEnableRawPool:  true,
+		WenfxlSyncDisableDefault: true,
+		WenfxlSyncProxyLimit:     30,
+
 		// 兼容旧配置
 		MaxResponseMs: 5000,
 		MaxFailCount:  3,
@@ -297,6 +314,25 @@ func Load() *Config {
 			}
 			if saved.ReplaceThreshold > 0 && saved.ReplaceThreshold <= 1 {
 				cfg.ReplaceThreshold = saved.ReplaceThreshold
+			}
+
+			if saved.WenfxlSyncEnabled {
+				cfg.WenfxlSyncEnabled = saved.WenfxlSyncEnabled
+			}
+			if saved.WenfxlSyncTargetURL != "" {
+				cfg.WenfxlSyncTargetURL = saved.WenfxlSyncTargetURL
+			}
+			if saved.WenfxlSyncPassword != "" {
+				cfg.WenfxlSyncPassword = saved.WenfxlSyncPassword
+			}
+			if saved.WenfxlSyncEnableRawPool != nil {
+				cfg.WenfxlSyncEnableRawPool = *saved.WenfxlSyncEnableRawPool
+			}
+			if saved.WenfxlSyncDisableDefault != nil {
+				cfg.WenfxlSyncDisableDefault = *saved.WenfxlSyncDisableDefault
+			}
+			if saved.WenfxlSyncProxyLimit > 0 {
+				cfg.WenfxlSyncProxyLimit = saved.WenfxlSyncProxyLimit
 			}
 
 			// 兼容旧配置
@@ -389,6 +425,14 @@ type savedConfig struct {
 	SingBoxPath           string `json:"singbox_path,omitempty"`
 	SingBoxBasePort       int    `json:"singbox_base_port,omitempty"`
 
+	// Wenfxl 兼容同步配置
+	WenfxlSyncEnabled        bool   `json:"wenfxl_sync_enabled,omitempty"`
+	WenfxlSyncTargetURL      string `json:"wenfxl_sync_target_url,omitempty"`
+	WenfxlSyncPassword       string `json:"wenfxl_sync_password,omitempty"`
+	WenfxlSyncEnableRawPool  *bool  `json:"wenfxl_sync_enable_raw_pool,omitempty"`
+	WenfxlSyncDisableDefault *bool  `json:"wenfxl_sync_disable_default,omitempty"`
+	WenfxlSyncProxyLimit     int    `json:"wenfxl_sync_proxy_limit,omitempty"`
+
 	// 兼容旧配置
 	FetchInterval int `json:"fetch_interval,omitempty"`
 	CheckInterval int `json:"check_interval,omitempty"`
@@ -402,30 +446,38 @@ func Save(cfg *Config) error {
 
 	customPriority := cfg.CustomPriority
 	customFreePriority := cfg.CustomFreePriority
+	wenfxlSyncEnableRawPool := cfg.WenfxlSyncEnableRawPool
+	wenfxlSyncDisableDefault := cfg.WenfxlSyncDisableDefault
 	data, err := json.MarshalIndent(savedConfig{
-		PoolMaxSize:           cfg.PoolMaxSize,
-		PoolHTTPRatio:         cfg.PoolHTTPRatio,
-		PoolMinPerProtocol:    cfg.PoolMinPerProtocol,
-		MaxLatencyMs:          cfg.MaxLatencyMs,
-		MaxLatencyEmergency:   cfg.MaxLatencyEmergency,
-		MaxLatencyHealthy:     cfg.MaxLatencyHealthy,
-		ValidateConcurrency:   cfg.ValidateConcurrency,
-		ValidateTimeout:       cfg.ValidateTimeout,
-		HealthCheckInterval:   cfg.HealthCheckInterval,
-		HealthCheckBatchSize:  cfg.HealthCheckBatchSize,
-		OptimizeInterval:      cfg.OptimizeInterval,
-		ReplaceThreshold:      cfg.ReplaceThreshold,
-		BlockedCountries:      cfg.BlockedCountries,
-		AllowedCountries:      cfg.AllowedCountries,
-		CustomProxyMode:       cfg.CustomProxyMode,
-		CustomPriority:        &customPriority,
-		CustomFreePriority:    &customFreePriority,
-		CustomProbeInterval:   cfg.CustomProbeInterval,
-		CustomRefreshInterval: cfg.CustomRefreshInterval,
-		SingBoxPath:           cfg.SingBoxPath,
-		SingBoxBasePort:       cfg.SingBoxBasePort,
-		FetchInterval:         cfg.FetchInterval,
-		CheckInterval:         cfg.CheckInterval,
+		PoolMaxSize:               cfg.PoolMaxSize,
+		PoolHTTPRatio:             cfg.PoolHTTPRatio,
+		PoolMinPerProtocol:        cfg.PoolMinPerProtocol,
+		MaxLatencyMs:              cfg.MaxLatencyMs,
+		MaxLatencyEmergency:       cfg.MaxLatencyEmergency,
+		MaxLatencyHealthy:         cfg.MaxLatencyHealthy,
+		ValidateConcurrency:       cfg.ValidateConcurrency,
+		ValidateTimeout:           cfg.ValidateTimeout,
+		HealthCheckInterval:       cfg.HealthCheckInterval,
+		HealthCheckBatchSize:      cfg.HealthCheckBatchSize,
+		OptimizeInterval:          cfg.OptimizeInterval,
+		ReplaceThreshold:          cfg.ReplaceThreshold,
+		BlockedCountries:          cfg.BlockedCountries,
+		AllowedCountries:          cfg.AllowedCountries,
+		CustomProxyMode:           cfg.CustomProxyMode,
+		CustomPriority:            &customPriority,
+		CustomFreePriority:        &customFreePriority,
+		CustomProbeInterval:       cfg.CustomProbeInterval,
+		CustomRefreshInterval:     cfg.CustomRefreshInterval,
+		SingBoxPath:               cfg.SingBoxPath,
+		SingBoxBasePort:           cfg.SingBoxBasePort,
+		WenfxlSyncEnabled:         cfg.WenfxlSyncEnabled,
+		WenfxlSyncTargetURL:       cfg.WenfxlSyncTargetURL,
+		WenfxlSyncPassword:        cfg.WenfxlSyncPassword,
+		WenfxlSyncEnableRawPool:   &wenfxlSyncEnableRawPool,
+		WenfxlSyncDisableDefault:  &wenfxlSyncDisableDefault,
+		WenfxlSyncProxyLimit:      cfg.WenfxlSyncProxyLimit,
+		FetchInterval:             cfg.FetchInterval,
+		CheckInterval:             cfg.CheckInterval,
 	}, "", "  ")
 	if err != nil {
 		return err
