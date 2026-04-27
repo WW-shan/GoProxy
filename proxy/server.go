@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -156,6 +157,19 @@ func sourceFilterFromMode(mode string) string {
 // handleHTTP 处理普通 HTTP 请求（带自动重试）
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	var tried []string
+
+	// 读取请求体以支持重试（原 r.Body 只能读一次）
+	var bodyBytes []byte
+	if r.Body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(r.Body)
+		r.Body.Close()
+		if err != nil {
+			http.Error(w, "failed to read request body", http.StatusBadRequest)
+			return
+		}
+	}
+
 	for attempt := 0; attempt <= s.cfg.MaxRetry; attempt++ {
 		p, err := s.selectProxy(tried, s.mode == "lowest-latency")
 		if err != nil {
@@ -172,8 +186,13 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 转发请求（使用完整 URL，上游代理通过 client transport 设置）
-		req, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+		var bodyReader io.Reader
+		if bodyBytes != nil {
+			bodyReader = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequest(r.Method, r.URL.String(), bodyReader)
 		if err != nil {
+			client.CloseIdleConnections()
 			continue
 		}
 		req.Header = r.Header.Clone()
@@ -184,9 +203,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[proxy] %s via %s failed, removing", r.RequestURI, p.Address)
 			s.storage.RecordProxyUse(p.Address, false)
 			removeOrDisableProxy(s.storage, p)
+			client.CloseIdleConnections()
 			continue
 		}
-		defer resp.Body.Close()
 
 		// 写回响应
 		for k, vv := range resp.Header {
@@ -196,6 +215,8 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
+		resp.Body.Close()
+		client.CloseIdleConnections()
 		s.storage.RecordProxyUse(p.Address, true)
 		if resp.StatusCode == 429 {
 			log.Printf("[proxy] ⚠️  429 %s via %s (protocol=%s)", r.RequestURI, p.Address, p.Protocol)
@@ -296,8 +317,12 @@ func (s *Server) buildClient(p *storage.Proxy) (*http.Client, error) {
 			return nil, err
 		}
 		return &http.Client{
-			Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
-			Timeout:   timeout,
+			Transport: &http.Transport{
+				Proxy:             http.ProxyURL(proxyURL),
+				DisableKeepAlives: true,
+				IdleConnTimeout:   30 * time.Second,
+			},
+			Timeout: timeout,
 		}, nil
 	case "socks5":
 		dialer, err := proxy.SOCKS5("tcp", p.Address, nil, proxy.Direct)
@@ -305,8 +330,12 @@ func (s *Server) buildClient(p *storage.Proxy) (*http.Client, error) {
 			return nil, err
 		}
 		return &http.Client{
-			Transport: &http.Transport{Dial: dialer.Dial},
-			Timeout:   timeout,
+			Transport: &http.Transport{
+				Dial:              dialer.Dial,
+				DisableKeepAlives: true,
+				IdleConnTimeout:   30 * time.Second,
+			},
+			Timeout: timeout,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", p.Protocol)

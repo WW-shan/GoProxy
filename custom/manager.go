@@ -412,7 +412,10 @@ func (m *Manager) fetchWithRetry(urlStr string) ([]byte, error) {
 
 // fetchURL 通过指定代理（或直连）拉取 URL 内容
 func (m *Manager) fetchURL(urlStr string, p *storage.Proxy) ([]byte, error) {
-	transport := &http.Transport{}
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		IdleConnTimeout:   30 * time.Second,
+	}
 
 	if p != nil {
 		// 通过代理访问时跳过 TLS 验证（免费代理可能 MITM）
@@ -435,6 +438,7 @@ func (m *Manager) fetchURL(urlStr string, p *storage.Proxy) ([]byte, error) {
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second, Transport: transport}
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
 		return nil, err

@@ -103,10 +103,13 @@ func checkHTTPSConnect(proxyAddr string, timeout time.Duration) bool {
 	client := &http.Client{
 		Transport: &http.Transport{
 			Proxy:               http.ProxyURL(proxyURL),
+			DisableKeepAlives:   true,
+			IdleConnTimeout:     30 * time.Second,
 			TLSHandshakeTimeout: timeout,
 		},
 		Timeout: timeout,
 	}
+	defer client.CloseIdleConnections()
 
 	// 随机起始索引
 	start := int(time.Now().UnixNano() % int64(len(httpsTestTargets)))
@@ -180,6 +183,7 @@ func (v *Validator) ValidateOne(p storage.Proxy) (bool, time.Duration, string, s
 	if err != nil {
 		return false, 0, "", ""
 	}
+	defer client.CloseIdleConnections()
 
 	start := time.Now()
 	resp, err := client.Get(v.validateURL)
@@ -250,7 +254,9 @@ func newHTTPClient(address string, timeout time.Duration) (*http.Client, error) 
 	}
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
+			Proxy:             http.ProxyURL(proxyURL),
+			DisableKeepAlives: true,
+			IdleConnTimeout:   30 * time.Second,
 		},
 		Timeout: timeout,
 	}, nil
@@ -263,7 +269,9 @@ func newSOCKS5Client(address string, timeout time.Duration) (*http.Client, error
 	}
 	return &http.Client{
 		Transport: &http.Transport{
-			Dial: dialer.Dial,
+			Dial:              dialer.Dial,
+			DisableKeepAlives: true,
+			IdleConnTimeout:   30 * time.Second,
 		},
 		Timeout: timeout,
 	}, nil
